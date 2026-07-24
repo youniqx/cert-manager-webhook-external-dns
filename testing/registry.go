@@ -13,7 +13,7 @@ import (
 	"sigs.k8s.io/external-dns/plan"
 )
 
-// Registry implements an sigs.k8s.io/external-dns/registry.Registry by hosting
+// Registry implements a sigs.k8s.io/external-dns/registry.Registry by hosting
 // a local DNS server. This allows us to test directly against ourselves over
 // localhost.
 type Registry struct {
@@ -23,9 +23,8 @@ type Registry struct {
 }
 
 func NewTestRegistry(t *testing.T, addr string, domains ...string) *Registry {
-	domainFilter := endpoint.NewDomainFilter(domains)
 	registry := &Registry{
-		domains: &domainFilter,
+		domains: endpoint.NewDomainFilter(domains),
 		records: make(map[endpoint.EndpointKey]*endpoint.Endpoint),
 	}
 

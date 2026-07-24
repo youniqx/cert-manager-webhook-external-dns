@@ -7,8 +7,6 @@ import (
 
 	"github.com/cert-manager/cert-manager/pkg/acme/webhook"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -18,8 +16,7 @@ import (
 	"sigs.k8s.io/external-dns/source"
 	"sigs.k8s.io/yaml"
 
-	"github.com/lion7/cert-manager-webhook-external-dns/internal/scheme"
-	contextutil "github.com/lion7/cert-manager-webhook-external-dns/internal/util/context"
+	contextutil "github.com/youniqx/cert-manager-webhook-external-dns/internal/util/context"
 
 	_ "embed"
 )
@@ -52,24 +49,12 @@ func (s *Solver) Initialize(config *rest.Config, stopCh <-chan struct{}) error {
 		return err
 	}
 
-	// Create scheme
-	runtimeScheme := scheme.NewScheme()
+	// Run external-dns in the background, stopping via context cancellation
+	// when the webhook is stopped
+	ctx := contextutil.StopChannelContext(stopCh)
 
-	// Create config for interacting with the CRD
-	// https://github.com/kubernetes-sigs/external-dns/blob/55a54b9e3ac858ce4818e5ececd0b151f20c136c/source/crd.go#L99-L101
-	configCopy := *config
-	configCopy.ContentConfig.GroupVersion = &scheme.ExternalDNSGroupVersion
-	configCopy.APIPath = "/apis"
-	configCopy.NegotiatedSerializer = serializer.WithoutConversionCodecFactory{CodecFactory: serializer.NewCodecFactory(runtimeScheme)}
-
-	// Create client for interacting with the external-dns group/version
-	restClient, err := rest.UnversionedRESTClientFor(&configCopy)
-	if err != nil {
-		return err
-	}
-
-	// Create source for new config
-	crdSource, err := source.NewCRDSource(restClient, "", "DNSEndpoint", "", labels.Everything(), runtimeScheme, false)
+	// Create a source watching DNSEndpoint objects in all namespaces
+	crdSource, err := source.NewCRDSource(ctx, config, &source.Config{})
 	if err != nil {
 		return err
 	}
@@ -82,10 +67,6 @@ func (s *Solver) Initialize(config *rest.Config, stopCh <-chan struct{}) error {
 		DomainFilter:       s.Registry.domains,
 		ManagedRecordTypes: []string{endpoint.RecordTypeA, endpoint.RecordTypeAAAA, endpoint.RecordTypeCNAME, endpoint.RecordTypeTXT},
 	}
-
-	// Run external-dns in the background, stopping via context cancellation
-	// when the webhook is stopped
-	ctx := contextutil.StopChannelContext(stopCh)
 
 	// Start external-dns, we cant use externalDNS.Run as this can perform a
 	// fatal log that ends the test when shutting down

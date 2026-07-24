@@ -1,22 +1,129 @@
+name: Release
+
 on:
   release:
     types:
       - 'created'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  CHART_OCI_REPO: ghcr.io/${{ github.repository }}/helm
+
 jobs:
-  build:
+  image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
         with:
-          go-version: '1.23.x'
-      - uses: ko-build/setup-ko@v0.8
-      - uses: azure/setup-helm@v4.3.0
-      - run: |
-          TAG=${{ github.ref_name }}
-          ko build --bare -t $TAG
-          sed -i "s|tag\: latest|tag: $TAG|" deploy/external-dns-webhook/values.yaml
-          helm package ./deploy/external-dns-webhook --version $TAG --app-version $TAG
-          helm push ./external-dns-webhook-$TAG.tgz oci://ghcr.io/lion7/cert-manager-webhook-external-dns
-          helm template -n cert-manager external-dns-webhook ./external-dns-webhook-$TAG.tgz > recommended.yaml
-          gh release upload $TAG recommended.yaml
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag
+
+      - id: build
+        name: Build and push multi-platform image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Generate in-toto SLSA provenance for the image via BuildKit
+          provenance: mode=max
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign image (cosign keyless)
+        env:
+          COSIGN_YES: 'true'
+        run: |
+          cosign sign "${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
+
+      - name: Attest image build provenance (GitHub)
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Generate CycloneDX SBOM for the image
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          artifact-name: ${{ github.event.repository.name }}-${{ github.ref_name }}.cdx.json
+          upload-release-assets: true
+
+      - name: Attach CycloneDX SBOM attestation to the image (cosign keyless)
+        env:
+          COSIGN_YES: 'true'
+        run: |
+          cosign attest \
+            --type cyclonedx \
+            --predicate sbom.cdx.json \
+            "${IMAGE_NAME}@${{ steps.build.outputs.digest }}"
+
+  chart:
+    runs-on: ubuntu-latest
+    needs: image
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Log in to ghcr
+        run: |
+          helm registry login "$REGISTRY" \
+            --username "${{ github.actor }}" \
+            --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Package and push chart
+        id: chart
+        run: |
+          TAG="${{ github.ref_name }}"
+          helm dependency build ./deploy/charts/external-dns-webhook
+          helm package ./deploy/charts/external-dns-webhook --version "$TAG" --app-version "$TAG"
+          PUSH_OUTPUT=$(helm push "./external-dns-webhook-$TAG.tgz" "oci://$CHART_OCI_REPO" 2>&1)
+          echo "$PUSH_OUTPUT"
+          DIGEST=$(echo "$PUSH_OUTPUT" | awk '/Digest:/ {print $2}')
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      - name: Sign chart (cosign keyless)
+        env:
+          COSIGN_YES: 'true'
+        run: |
+          cosign sign "$CHART_OCI_REPO/external-dns-webhook@${{ steps.chart.outputs.digest }}"
+
+      - name: Attest chart build provenance (GitHub)
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ${{ env.CHART_OCI_REPO }}/external-dns-webhook
+          subject-digest: ${{ steps.chart.outputs.digest }}
+          push-to-registry: true

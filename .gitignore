@@ -17,3 +17,7 @@ cert-manager-webhook-external-dns
 # Make artifacts
 _out
 _test
+
+# Helm dependency archives (Chart.lock is committed, the tarballs are not)
+deploy/charts/external-dns-webhook/charts/
+deploy/charts/external-dns-webhook/results.xml

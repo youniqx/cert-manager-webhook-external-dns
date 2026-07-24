@@ -6,6 +6,14 @@
 
 This repo allows [cert-manager](https://github.com/cert-manager/cert-manager) to use [ExternalDNS](https://github.com/kubernetes-sigs/external-dns) to handle ACME challenges. 
 
+> [!NOTE]
+> This repository started as a fork of
+> [lion7/cert-manager-webhook-external-dns](https://github.com/lion7/cert-manager-webhook-external-dns)
+> by [Gerard de Leeuw](https://github.com/lion7) and is now maintained by [youniqx](https://github.com/youniqx)
+> as an independent, standalone project. Many thanks to the original author for the groundwork.
+> The two projects are **not** interchangeable: this fork uses its own API group
+> (`cert-manager-webhook-external-dns.youniqx.com`), its own container image and Helm chart location.
+
 ## Requirements 
 
 ### ExternalDNS
@@ -40,49 +48,36 @@ Any supported version of cert-manager supports DNS webhooks, for documentation o
 The webhook can be installed using Helm:
 
 ```bash
-# Add the repository
-helm repo add cert-manager-webhook-external-dns oci://ghcr.io/lion7/cert-manager-webhook-external-dns
-
-# Install the webhook
 helm install external-dns-webhook \
-  cert-manager-webhook-external-dns/external-dns-webhook \
-  --namespace cert-manager
-```
-
-### Using OCI Registry
-
-You can also install directly from the OCI registry:
-
-```bash
-helm install external-dns-webhook \
-  oci://ghcr.io/lion7/cert-manager-webhook-external-dns/external-dns-webhook \
+  oci://ghcr.io/youniqx/cert-manager-webhook-external-dns/helm/external-dns-webhook:<tag> \
   --namespace cert-manager
 ```
 
 ### Configuration
 
-The default values should work for most installations. You can customize the installation by creating a values file:
+The chart is built on the [bjw-s common library](https://bjw-s-labs.github.io/helm-charts/docs/common-library/), so all of its
+values (controllers, service, rbac, persistence, ...) are available for customization. The default values should work for most
+installations. You can customize the installation by creating a values file:
 
 ```yaml
 # values.yaml
-image:
-  repository: ghcr.io/lion7/cert-manager-webhook-external-dns
-  tag: latest
-  pullPolicy: IfNotPresent
-
-replicaCount: 1
-
-resources:
-  limits:
-    cpu: 100m
-    memory: 128Mi
-  requests:
-    cpu: 100m
-    memory: 128Mi
-
-# Webhook configuration
-webhook:
-  port: 8443
+controllers:
+  webhook:
+    replicas: 1
+    containers:
+      app:
+        image:
+          repository: ghcr.io/youniqx/cert-manager-webhook-external-dns
+          # Defaults to the chart's appVersion
+          tag: "{{ .Chart.AppVersion }}"
+          pullPolicy: IfNotPresent
+        resources:
+          limits:
+            cpu: 100m
+            memory: 128Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
 
 # cert-manager configuration
 certManager:
@@ -94,9 +89,51 @@ Then install with:
 
 ```bash
 helm install external-dns-webhook \
-  oci://ghcr.io/lion7/cert-manager-webhook-external-dns/external-dns-webhook \
+  oci://ghcr.io/youniqx/cert-manager-webhook-external-dns/helm/external-dns-webhook:<tag> \
   --namespace cert-manager \
   -f values.yaml
+```
+
+## Supply chain security
+
+Container images are multi-platform (`linux/amd64`, `linux/arm64`), built from a [distroless](https://github.com/GoogleContainerTools/distroless)
+static base image with all base images pinned by digest. Every release image and Helm chart is signed with
+[cosign](https://docs.sigstore.dev/) keyless signing and ships with SLSA build provenance attestations and a CycloneDX SBOM.
+
+Verify the image signature:
+
+```bash
+# Image
+cosign verify ghcr.io/youniqx/cert-manager-webhook-external-dns:<tag> \
+  --certificate-identity-regexp 'https://github.com/youniqx/cert-manager-webhook-external-dns/\.github/workflows/release\.yaml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# Helm chart
+cosign verify ghcr.io/youniqx/cert-manager-webhook-external-dns/helm/external-dns-webhook:<tag> \
+  --certificate-identity-regexp 'https://github.com/youniqx/cert-manager-webhook-external-dns/\.github/workflows/release\.yaml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Verify the build provenance (image or chart) via the GitHub CLI:
+
+```bash
+# Image
+gh attestation verify oci://ghcr.io/youniqx/cert-manager-webhook-external-dns:<tag> \
+  --repo youniqx/cert-manager-webhook-external-dns
+
+# Helm chart
+gh attestation verify oci://ghcr.io/youniqx/cert-manager-webhook-external-dns/helm/external-dns-webhook:<tag> \
+  --repo youniqx/cert-manager-webhook-external-dns
+```
+
+Inspect the CycloneDX SBOM attached to the image (also uploaded as a release asset):
+
+```bash
+cosign verify-attestation ghcr.io/youniqx/cert-manager-webhook-external-dns:<tag> \
+  --type cyclonedx \
+  --certificate-identity-regexp 'https://github.com/youniqx/cert-manager-webhook-external-dns/\.github/workflows/release\.yaml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r '.payload' | base64 -d | jq '.predicate'
 ```
 
 ## Usage
@@ -114,7 +151,7 @@ spec:
     solvers:
     - dns01:
         webhook:
-          groupName: cert-manager-webhook.lion7.dev
+          groupName: cert-manager-webhook-external-dns.youniqx.com
           solverName: external-dns
 ```
 
@@ -126,9 +163,9 @@ else they will have undetermined behaviour when used with cert-manager.
 **It is essential that you configure and run the test suite when creating a
 DNS01 webhook.**
 
-A test file has been provided in [main_test.go](main_test.go).
-
-You can run the test suite with:
+A test file has been provided in [solver_test.go](pkg/externaldnssolver/solver_test.go), which runs the official cert-manager
+DNS01 conformance suite against this webhook. The required Kubernetes test binaries are downloaded automatically
+(see [TESTING.md](TESTING.md) for details):
 
 ```bash
 make test

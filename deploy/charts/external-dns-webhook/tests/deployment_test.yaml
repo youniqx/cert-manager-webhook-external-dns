@@ -1,0 +1,134 @@
+suite: deployment
+templates:
+  - templates/common.yaml
+release:
+  name: external-dns-webhook
+  namespace: cert-manager
+tests:
+  - it: renders the deployment with the expected defaults
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook
+      - equal:
+          path: metadata.namespace
+          value: cert-manager
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: external-dns-webhook
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/youniqx/cert-manager-webhook-external-dns:0.0.0
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --secure-port=10250
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tls-cert-file=/tls/tls.crt
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tls-private-key-file=/tls/tls.key
+
+  - it: configures HTTPS probes on the webhook port
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet
+          value:
+            scheme: HTTPS
+            path: /livez
+            port: 10250
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet
+          value:
+            scheme: HTTPS
+            path: /readyz
+            port: 10250
+
+  - it: runs with a hardened security context
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          value:
+            - ALL
+
+  - it: mounts the serving certificate secret at /tls
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].secret.secretName
+          value: external-dns-webhook-webhook-tls
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /tls
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].readOnly
+          value: true
+
+  - it: follows fullnameOverride in the name, service account and certificate references
+    set:
+      global:
+        fullnameOverride: my-webhook
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-webhook
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: my-webhook
+      - equal:
+          path: spec.template.spec.volumes[0].secret.secretName
+          value: my-webhook-webhook-tls
+
+  - it: uses a custom image tag when provided
+    set:
+      controllers:
+        webhook:
+          containers:
+            app:
+              image:
+                tag: 1.2.3
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/youniqx/cert-manager-webhook-external-dns:1.2.3

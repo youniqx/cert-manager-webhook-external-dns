@@ -1,0 +1,125 @@
+suite: pki
+templates:
+  - templates/common.yaml
+release:
+  name: external-dns-webhook
+  namespace: cert-manager
+tests:
+  - it: renders all PKI resources
+    asserts:
+      - containsDocument:
+          apiVersion: cert-manager.io/v1
+          kind: Issuer
+          name: external-dns-webhook-self-signed
+          namespace: cert-manager
+          any: true
+      - containsDocument:
+          apiVersion: cert-manager.io/v1
+          kind: Issuer
+          name: external-dns-webhook-ca
+          namespace: cert-manager
+          any: true
+      - containsDocument:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          name: external-dns-webhook-ca
+          namespace: cert-manager
+          any: true
+      - containsDocument:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          name: external-dns-webhook-webhook-tls
+          namespace: cert-manager
+          any: true
+
+  - it: creates a self-signed issuer
+    documentSelector:
+      path: metadata.name
+      value: external-dns-webhook-self-signed
+    asserts:
+      - equal:
+          path: kind
+          value: Issuer
+      - exists:
+          path: spec.selfSigned
+
+  - it: issues the CA certificate from the self-signed issuer
+    documentSelector:
+      path: spec.commonName
+      value: ca.external-dns-webhook.cert-manager
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook-ca
+      - equal:
+          path: spec.secretName
+          value: external-dns-webhook-ca
+      - equal:
+          path: spec.issuerRef.name
+          value: external-dns-webhook-self-signed
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.duration
+          value: 87600h
+
+  - it: creates the CA issuer backed by the CA certificate secret
+    documentSelector:
+      path: spec.ca.secretName
+      value: external-dns-webhook-ca
+    asserts:
+      - equal:
+          path: kind
+          value: Issuer
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook-ca
+
+  - it: issues the serving certificate from the CA issuer with the service DNS names
+    documentSelector:
+      path: spec.secretName
+      value: external-dns-webhook-webhook-tls
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook-webhook-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: external-dns-webhook-ca
+      - equal:
+          path: spec.duration
+          value: 8760h
+      - equal:
+          path: spec.dnsNames
+          value:
+            - external-dns-webhook
+            - external-dns-webhook.cert-manager
+            - external-dns-webhook.cert-manager.svc
+
+  - it: keeps the whole PKI chain aligned with fullnameOverride
+    set:
+      global:
+        fullnameOverride: my-webhook
+    documentSelector:
+      path: spec.secretName
+      value: my-webhook-webhook-tls
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-webhook-webhook-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: my-webhook-ca
+      - equal:
+          path: spec.dnsNames
+          value:
+            - my-webhook
+            - my-webhook.cert-manager
+            - my-webhook.cert-manager.svc
