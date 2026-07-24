@@ -1,0 +1,61 @@
+suite: apiservice
+templates:
+  - templates/apiservice.yaml
+release:
+  name: external-dns-webhook
+  namespace: cert-manager
+tests:
+  - it: registers the webhook API group
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: v1alpha1.cert-manager-webhook-external-dns.youniqx.com
+      - equal:
+          path: spec.group
+          value: cert-manager-webhook-external-dns.youniqx.com
+      - equal:
+          path: spec.version
+          value: v1alpha1
+      - equal:
+          path: spec.groupPriorityMinimum
+          value: 1000
+      - equal:
+          path: spec.versionPriority
+          value: 15
+
+  - it: points at the webhook service and serving certificate
+    asserts:
+      - equal:
+          path: spec.service.name
+          value: external-dns-webhook
+      - equal:
+          path: spec.service.namespace
+          value: cert-manager
+      - equal:
+          path: metadata.annotations["cert-manager.io/inject-ca-from"]
+          value: cert-manager/external-dns-webhook-webhook-tls
+
+  - it: follows a custom groupName
+    set:
+      groupName: acme.example.com
+    asserts:
+      - equal:
+          path: metadata.name
+          value: v1alpha1.acme.example.com
+      - equal:
+          path: spec.group
+          value: acme.example.com
+
+  - it: keeps service and certificate references aligned with fullnameOverride
+    set:
+      global:
+        fullnameOverride: my-webhook
+    asserts:
+      - equal:
+          path: spec.service.name
+          value: my-webhook
+      - equal:
+          path: metadata.annotations["cert-manager.io/inject-ca-from"]
+          value: cert-manager/my-webhook-webhook-tls

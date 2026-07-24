@@ -1,0 +1,226 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/bjw-s-labs/helm-charts/common-5.0.1/charts/library/common/values.schema.json
+
+# -- Chart-wide settings for the bjw-s common library.
+global:
+  # -- (string) Set the chart name
+  nameOverride: null
+  # -- (string) Set the chart fullname
+  fullnameOverride: null
+
+# -- The groupName avoids naming conflicts on the Kubernetes API, it should be
+# set by the author of the webhook to a unique domain that the author owns.
+# Once set to a unique domain name by the webhook author, it does not need to
+# be further adjusted by the users of this chart!
+# The name will need to be referenced in each Issuer's `webhook` stanza to
+# inform cert-manager of where to send ChallengePayload resources in order to
+# solve the DNS01 challenge.
+groupName: cert-manager-webhook-external-dns.youniqx.com
+
+certManager:
+  # -- Namespace where cert-manager is deployed.
+  namespace: cert-manager
+  # -- ServiceAccount used by cert-manager.
+  serviceAccountName: cert-manager
+
+# NOTE: The webhook listens on port 10250. If you need to change it, override
+# the `--secure-port` argument, the probe ports and the service targetPort
+# below to the same value.
+
+controllers:
+  webhook:
+    replicas: 1
+    containers:
+      app:
+        image:
+          repository: ghcr.io/youniqx/cert-manager-webhook-external-dns
+          # -- Image tag, defaults to the chart's appVersion.
+          tag: "{{ .Chart.AppVersion }}"
+          pullPolicy: IfNotPresent
+        args:
+          - --secure-port=10250
+          - --tls-cert-file=/tls/tls.crt
+          - --tls-private-key-file=/tls/tls.key
+        probes:
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                scheme: HTTPS
+                path: /livez
+                port: 10250
+          readiness:
+            enabled: true
+            custom: true
+            spec:
+              httpGet:
+                scheme: HTTPS
+                path: /readyz
+                port: 10250
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+              - ALL
+        resources: {}
+
+defaultPodOptions:
+  # The webhook talks to the Kubernetes API, it needs its ServiceAccount token.
+  automountServiceAccountToken: true
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
+serviceAccount:
+  webhook: {}
+
+service:
+  webhook:
+    controller: webhook
+    type: ClusterIP
+    ports:
+      https:
+        port: 443
+        protocol: HTTPS
+        targetPort: 10250
+
+persistence:
+  certs:
+    type: secret
+    name: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-webhook-tls'
+    globalMounts:
+      - path: /tls
+        readOnly: true
+
+rbac:
+  roles:
+    # Grant cert-manager permission to validate using our apiserver
+    domain-solver:
+      type: ClusterRole
+      rules:
+        - apiGroups:
+            - "{{ .Values.groupName }}"
+          resources:
+            - "*"
+          verbs:
+            - create
+    # Grant the webhook permission to manage DNSEndpoint resources
+    dnsendpoint-manager:
+      type: ClusterRole
+      rules:
+        - apiGroups:
+            - externaldns.k8s.io
+          resources:
+            - dnsendpoints
+          verbs:
+            - get
+            - list
+            - watch
+            - create
+            - update
+            - patch
+            - delete
+  bindings:
+    domain-solver:
+      type: ClusterRoleBinding
+      roleRef:
+        identifier: domain-solver
+      subjects:
+        - kind: ServiceAccount
+          name: "{{ .Values.certManager.serviceAccountName }}"
+          namespace: "{{ .Values.certManager.namespace }}"
+    dnsendpoint-manager:
+      type: ClusterRoleBinding
+      roleRef:
+        identifier: dnsendpoint-manager
+      subjects:
+        - identifier: webhook
+    # The webhook gets the auth-delegator role to delegate auth decisions to
+    # the core apiserver
+    auth-delegator:
+      type: ClusterRoleBinding
+      roleRef:
+        kind: ClusterRole
+        name: system:auth-delegator
+      subjects:
+        - identifier: webhook
+
+# Resource types the bjw-s common library does not support natively.
+# The manifest bodies are rendered as Helm templates by the library.
+# NOTE: the APIService lives in templates/apiservice.yaml instead, because it
+# needs a templated cert-manager.io/inject-ca-from annotation and rawResources
+# renders annotations verbatim.
+rawResources:
+  selfsigned-issuer:
+    forceRename: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-self-signed'
+    manifest:
+      apiVersion: cert-manager.io/v1
+      kind: Issuer
+      metadata:
+        namespace: "{{ .Release.Namespace }}"
+      spec:
+        selfSigned: {}
+  ca-certificate:
+    forceRename: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-ca'
+    manifest:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        namespace: "{{ .Release.Namespace }}"
+      spec:
+        secretName: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-ca'
+        duration: 87600h
+        issuerRef:
+          name: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-self-signed'
+        commonName: ca.external-dns-webhook.cert-manager
+        isCA: true
+  ca-issuer:
+    forceRename: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-ca'
+    manifest:
+      apiVersion: cert-manager.io/v1
+      kind: Issuer
+      metadata:
+        namespace: "{{ .Release.Namespace }}"
+      spec:
+        ca:
+          secretName: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-ca'
+  serving-certificate:
+    forceRename: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-webhook-tls'
+    manifest:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      metadata:
+        namespace: "{{ .Release.Namespace }}"
+      spec:
+        secretName: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-webhook-tls'
+        duration: 8760h  # 1y
+        issuerRef:
+          name: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}-ca'
+        dnsNames:
+          - '{{ include "bjw-s.common.lib.chart.names.fullname" . }}'
+          - '{{ include "bjw-s.common.lib.chart.names.fullname" . }}.{{ .Release.Namespace }}'
+          - '{{ include "bjw-s.common.lib.chart.names.fullname" . }}.{{ .Release.Namespace }}.svc'
+  # Grant the webhook permission to read the ConfigMap containing the
+  # Kubernetes apiserver's requestheader-ca-certificate. This ConfigMap is
+  # automatically created by the Kubernetes apiserver, and the binding must
+  # live in the kube-system namespace.
+  authentication-reader:
+    forceRename: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}:webhook-authentication-reader'
+    manifest:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        namespace: kube-system
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: extension-apiserver-authentication-reader
+      subjects:
+        - apiGroup: ""
+          kind: ServiceAccount
+          name: '{{ include "bjw-s.common.lib.chart.names.fullname" . }}'
+          namespace: "{{ .Release.Namespace }}"

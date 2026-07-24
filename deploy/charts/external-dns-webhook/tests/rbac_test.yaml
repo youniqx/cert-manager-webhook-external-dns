@@ -1,0 +1,160 @@
+suite: rbac
+templates:
+  - templates/common.yaml
+release:
+  name: external-dns-webhook
+  namespace: cert-manager
+tests:
+  - it: grants cert-manager permission to use the webhook API group
+    documentSelector:
+      path: rules[0].apiGroups[0]
+      value: cert-manager-webhook-external-dns.youniqx.com
+    asserts:
+      - equal:
+          path: kind
+          value: ClusterRole
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook-domain-solver
+      - equal:
+          path: rules[0].resources
+          value:
+            - "*"
+      - equal:
+          path: rules[0].verbs
+          value:
+            - create
+
+  - it: binds the domain-solver role to the cert-manager service account
+    documentSelector:
+      path: roleRef.name
+      value: external-dns-webhook-domain-solver
+    asserts:
+      - equal:
+          path: kind
+          value: ClusterRoleBinding
+      - equal:
+          path: roleRef.kind
+          value: ClusterRole
+      - equal:
+          path: subjects[0]
+          value:
+            kind: ServiceAccount
+            name: cert-manager
+            namespace: cert-manager
+
+  - it: grants the webhook permission to manage DNSEndpoint resources
+    documentSelector:
+      path: rules[0].apiGroups[0]
+      value: externaldns.k8s.io
+    asserts:
+      - equal:
+          path: kind
+          value: ClusterRole
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook-dnsendpoint-manager
+      - equal:
+          path: rules[0].resources
+          value:
+            - dnsendpoints
+      - equal:
+          path: rules[0].verbs
+          value:
+            - get
+            - list
+            - watch
+            - create
+            - update
+            - patch
+            - delete
+
+  - it: binds the dnsendpoint-manager role to the webhook service account
+    documentSelector:
+      path: roleRef.name
+      value: external-dns-webhook-dnsendpoint-manager
+    asserts:
+      - equal:
+          path: kind
+          value: ClusterRoleBinding
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: external-dns-webhook
+      - equal:
+          path: subjects[0].namespace
+          value: cert-manager
+
+  - it: delegates authentication decisions to the core apiserver
+    documentSelector:
+      path: roleRef.name
+      value: system:auth-delegator
+    asserts:
+      - equal:
+          path: kind
+          value: ClusterRoleBinding
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook-auth-delegator
+      - equal:
+          path: subjects[0].name
+          value: external-dns-webhook
+      - equal:
+          path: subjects[0].namespace
+          value: cert-manager
+
+  - it: allows the webhook to read the extension-apiserver authentication config
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook:webhook-authentication-reader
+      - equal:
+          path: metadata.namespace
+          value: kube-system
+      - equal:
+          path: roleRef.name
+          value: extension-apiserver-authentication-reader
+      - equal:
+          path: roleRef.kind
+          value: Role
+      - equal:
+          path: subjects[0].name
+          value: external-dns-webhook
+      - equal:
+          path: subjects[0].namespace
+          value: cert-manager
+
+  - it: follows a custom groupName in the domain-solver role
+    set:
+      groupName: acme.example.com
+    documentSelector:
+      path: rules[0].apiGroups[0]
+      value: acme.example.com
+    asserts:
+      - equal:
+          path: kind
+          value: ClusterRole
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook-domain-solver
+
+  - it: binds the domain-solver role to a custom cert-manager service account
+    set:
+      certManager:
+        namespace: security
+        serviceAccountName: my-cert-manager
+    documentSelector:
+      path: roleRef.name
+      value: external-dns-webhook-domain-solver
+    asserts:
+      - equal:
+          path: subjects[0]
+          value:
+            kind: ServiceAccount
+            name: my-cert-manager
+            namespace: security

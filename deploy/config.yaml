@@ -1,0 +1,6 @@
+---
+chart-dirs:
+  - deploy/charts
+chart-repos:
+  - bjw-s-labs=https://bjw-s-labs.github.io/helm-charts/
+check-version-increment: false

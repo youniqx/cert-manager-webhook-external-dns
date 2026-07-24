@@ -1,0 +1,72 @@
+suite: service and serviceaccount
+templates:
+  - templates/common.yaml
+release:
+  name: external-dns-webhook
+  namespace: cert-manager
+tests:
+  - it: renders the webhook service on port 443 targeting the webhook port
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook
+      - equal:
+          path: metadata.namespace
+          value: cert-manager
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].name
+          value: https
+      - equal:
+          path: spec.ports[0].port
+          value: 443
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 10250
+      - equal:
+          path: spec.ports[0].protocol
+          value: TCP
+
+  - it: selects the webhook pods
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: external-dns-webhook
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: external-dns-webhook
+      - equal:
+          path: spec.selector["app.kubernetes.io/controller"]
+          value: webhook
+
+  - it: renders the service account used by the deployment
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.name
+          value: external-dns-webhook
+      - equal:
+          path: metadata.namespace
+          value: cert-manager
+
+  - it: keeps the service name aligned with fullnameOverride
+    set:
+      global:
+        fullnameOverride: my-webhook
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-webhook
