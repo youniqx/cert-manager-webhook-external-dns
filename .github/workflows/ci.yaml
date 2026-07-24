@@ -48,7 +48,7 @@ jobs:
           helm plugin install oci://ghcr.io/helm-unittest/helm-unittest/unittest@sha256:5ea10e89b7ec83cbdc3f55854ea729a674d694fafce0e190e6e314547816348a # v1.1.1
 
       - name: Run chart-testing (lint)
-        run: ct lint --config=deploy/config.yaml --target-branch=${{ github.event.repository.default_branch }}
+        run: ct lint --config=deploy/config.yaml --all
 
       - name: Run Helm chart unit tests
         run: |
