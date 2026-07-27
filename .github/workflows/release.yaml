@@ -108,6 +108,7 @@ jobs:
         id: chart
         run: |
           TAG="${{ github.ref_name }}"
+          helm repo add bjw-s https://bjw-s-labs.github.io/helm-charts
           helm dependency build ./deploy/charts/external-dns-webhook
           helm package ./deploy/charts/external-dns-webhook --version "$TAG" --app-version "$TAG"
           PUSH_OUTPUT=$(helm push "./external-dns-webhook-$TAG.tgz" "oci://$CHART_OCI_REPO" 2>&1)
